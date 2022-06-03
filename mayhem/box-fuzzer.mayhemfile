@@ -1,0 +1,4 @@
+project: PROJECT
+target: box-fuzzer
+cmds:
+- cmd: /out/box-fuzzer
