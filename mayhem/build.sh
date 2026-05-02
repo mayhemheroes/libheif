@@ -15,10 +15,15 @@
 #
 ################################################################################
 
+# Force DWARF 4 to avoid ld FORM 0x25 errors with clang 22 + old binutils.
+export CFLAGS="-gdwarf-4 $CFLAGS"
+export CXXFLAGS="-gdwarf-4 $CXXFLAGS"
+
 # Build dependencies.
 export DEPS_PATH=$SRC/deps
 mkdir -p $DEPS_PATH
 
+# ---- x265 (CMake) ----
 cd $SRC/x265/build/linux
 cmake -G "Unix Makefiles" \
     -DCMAKE_C_COMPILER=$CC -DCMAKE_CXX_COMPILER=$CXX \
@@ -30,21 +35,22 @@ make clean
 make -j$(nproc) x265-static
 make install
 
-cd $SRC/libde265
-./autogen.sh
-./configure \
-    --prefix="$DEPS_PATH" \
-    --disable-shared \
-    --enable-static \
-    --disable-dec265 \
-    --disable-sherlock265 \
-    --disable-hdrcopy \
-    --disable-enc265 \
-    --disable-acceleration_speed
+# ---- libde265 (CMake — autogen.sh removed from master branch) ----
+mkdir -p $SRC/libde265/build
+cd $SRC/libde265/build
+cmake -G "Unix Makefiles" \
+    -DCMAKE_C_COMPILER=$CC -DCMAKE_CXX_COMPILER=$CXX \
+    -DCMAKE_C_FLAGS="$CFLAGS" -DCMAKE_CXX_FLAGS="$CXXFLAGS" \
+    -DCMAKE_INSTALL_PREFIX="$DEPS_PATH" \
+    -DBUILD_SHARED_LIBS=OFF \
+    -DENABLE_DECODER=ON \
+    -DENABLE_ENCODER=OFF \
+    ..
 make clean
 make -j$(nproc)
 make install
 
+# ---- aom (CMake) ----
 mkdir -p $SRC/aom/build/linux
 cd $SRC/aom/build/linux
 cmake -G "Unix Makefiles" \
@@ -67,20 +73,31 @@ make install
 rm -f $DEPS_PATH/lib/*.so
 rm -f $DEPS_PATH/lib/*.so.*
 
-cd $SRC/libheif
-./autogen.sh
-PKG_CONFIG="pkg-config --static" PKG_CONFIG_PATH="$DEPS_PATH/lib/pkgconfig" ./configure \
-    --disable-shared \
-    --enable-static \
-    --disable-examples \
-    --disable-go \
-    --enable-libfuzzer="$LIB_FUZZING_ENGINE" \
-    CPPFLAGS="-I$DEPS_PATH/include"
-make clean
+# ---- libheif (CMake with fuzzers) ----
+mkdir -p $SRC/libheif/build
+cd $SRC/libheif/build
+cmake -G "Unix Makefiles" \
+    -DCMAKE_PREFIX_PATH="$DEPS_PATH" \
+    -DWITH_FUZZERS=ON \
+    -DFUZZING_C_COMPILER="$CC" \
+    -DFUZZING_CXX_COMPILER="$CXX" \
+    -DFUZZING_COMPILE_OPTIONS="$CXXFLAGS" \
+    -DFUZZING_LINKER_OPTIONS="$LIB_FUZZING_ENGINE" \
+    -DBUILD_SHARED_LIBS=OFF \
+    -DWITH_EXAMPLES=OFF \
+    -DWITH_LIBDE265=ON \
+    -DWITH_X265=ON \
+    -DWITH_AOM_ENCODER=ON \
+    -DWITH_AOM_DECODER=ON \
+    ..
 make -j$(nproc)
 
-cp libheif/*-fuzzer $OUT
-cp fuzzing/dictionary.txt $OUT/box-fuzzer.dict
-cp fuzzing/dictionary.txt $OUT/file-fuzzer.dict
+# CMake produces underscore-named binaries (box_fuzzer, file_fuzzer, etc.)
+cp fuzzing/box_fuzzer $OUT/box-fuzzer
+cp fuzzing/file_fuzzer $OUT/file-fuzzer
+cp fuzzing/encoder_fuzzer $OUT/encoder-fuzzer
+cp fuzzing/color_conversion_fuzzer $OUT/color-conversion-fuzzer
+cp $SRC/libheif/fuzzing/data/dictionary.txt $OUT/box-fuzzer.dict
+cp $SRC/libheif/fuzzing/data/dictionary.txt $OUT/file-fuzzer.dict
 
-zip -r $OUT/file-fuzzer_seed_corpus.zip fuzzing/corpus/*.heic
+zip -r $OUT/file-fuzzer_seed_corpus.zip $SRC/libheif/fuzzing/data/corpus/*.heic
